@@ -1,3 +1,5 @@
+![Telegram File Downloader](./assets/header.png)
+
 # Telegram File Downloader
 
 ## Overview
