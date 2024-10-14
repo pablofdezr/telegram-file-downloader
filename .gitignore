@@ -1,0 +1,7 @@
+files/
+node_modules/
+.env
+combined.log
+error.log
+restart-git.sh
+.gitignore.DS_Store
