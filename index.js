@@ -1,3 +1,4 @@
+// Required imports
 import { TelegramClient } from 'telegram/client/TelegramClient.js';
 import { StringSession } from 'telegram/sessions/StringSession.js';
 import { Worker } from 'worker_threads';
@@ -9,80 +10,95 @@ import logger from './logger.js';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { promisify } from 'util';
+import config from './config.js'; // New: Import configuration from a separate file
 
-// Get the directory name of the current module
+// Configuration setup
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// Load environment variables from .env file
 dotenv.config({ path: join(__dirname, '.env') });
 
-// Parse API credentials from environment variables
 const apiId = parseInt(process.env.API_ID);
 const apiHash = process.env.API_HASH;
 
-// Check if API credentials are properly set
+// Configuration validation
 if (!apiId || !apiHash) {
-  console.error('API_ID and API_HASH must be defined in your .env file');
+  logger.error('API_ID and API_HASH must be defined in your .env file');
   process.exit(1);
 }
 
-// Limit the number of simultaneous downloads
-const MAX_SIMULTANEOUS_DOWNLOADS = 3;
+// State variables
 let activeWorkers = 0;
 const linkQueue = [];
 const downloads = new Map();
 
-// Set up readline interface for user input
+// Setup readline interface for user input
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
 });
 
-// Promisify readline question
-function question(prompt) {
-    return new Promise((resolve) => rl.question(prompt, resolve));
-}
+// Promisify the readline question method
+const question = promisify(rl.question).bind(rl);
 
-// Function to create a new worker for downloading a file
-async function createWorker(link, stringSession) {
+// Function to create and manage a worker
+async function createWorker(link, stringSession, retryCount = 0) {
     const downloadsPath = path.join(os.homedir(), 'Downloads');
     const worker = new Worker('./worker.js', {
         workerData: { link, stringSession, apiId, apiHash, downloadsPath }
     });
 
     const id = Date.now().toString();
-    logger.info(`Starting download: ${link}`);
+    logger.info(`Starting download (attempt ${retryCount + 1}): ${link}`);
 
     downloads.set(id, { worker, fileName: link, status: 'in progress', progress: 0, speed: 0, downloadedSize: 0, totalSize: 0 });
 
     return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            logger.warn(`Download timeout for ${link}`);
+            worker.terminate();
+            downloads.delete(id);
+            reject(new Error('Download timeout'));
+        }, config.DOWNLOAD_TIMEOUT);
+
         worker.on('message', (message) => {
             if (message.type === 'progress') {
-                downloads.get(id).fileName = message.fileName;
-                downloads.get(id).progress = message.progress;
-                downloads.get(id).speed = message.speed;
-                downloads.get(id).downloadedSize = message.downloadedSize;
-                downloads.get(id).totalSize = message.totalSize;
+                const download = downloads.get(id);
+                Object.assign(download, {
+                    fileName: message.fileName,
+                    progress: message.progress,
+                    speed: message.speed,
+                    downloadedSize: message.downloadedSize,
+                    totalSize: message.totalSize
+                });
                 updateDownloadDisplay(id);
             } else if (message.type === 'complete') {
+                clearTimeout(timeout);
                 process.stdout.write('\n');
                 logger.info(`${message.fileName} downloaded. Total size: ${message.totalSize} MB, Average speed: ${message.finalSpeed} MB/s`);
                 downloads.delete(id);
                 resolve();
             } else if (message.type === 'error') {
+                clearTimeout(timeout);
                 process.stdout.write('\n');
                 logger.error(`Error: ${message.message}`);
                 downloads.delete(id);
-                reject(new Error(message.message));
+                if (retryCount < config.MAX_RETRIES) {
+                    logger.info(`Retrying download (attempt ${retryCount + 2})...`);
+                    resolve(createWorker(link, stringSession, retryCount + 1));
+                } else {
+                    reject(new Error(`Max retries reached for ${link}`));
+                }
             }
         });
 
         worker.on('error', (error) => {
+            clearTimeout(timeout);
             logger.error('Worker error:', error);
             reject(error);
         });
 
         worker.on('exit', (code) => {
+            clearTimeout(timeout);
             if (code !== 0) {
                 logger.error(`Worker stopped with exit code ${code}`);
                 reject(new Error(`Worker stopped with exit code ${code}`));
@@ -91,7 +107,8 @@ async function createWorker(link, stringSession) {
     });
 }
 
-// Function to update the download progress display
+// Function to update the download display
+// TODO: Consider using a library like cli-progress for better visualization
 function updateDownloadDisplay(id) {
     const download = downloads.get(id);
     if (download) {
@@ -101,9 +118,9 @@ function updateDownloadDisplay(id) {
     }
 }
 
-// Function to process the queue of download links
+// Function to process the link queue
 async function processQueue() {
-    while (linkQueue.length > 0 && activeWorkers < MAX_SIMULTANEOUS_DOWNLOADS) {
+    while (linkQueue.length > 0 && activeWorkers < config.MAX_SIMULTANEOUS_DOWNLOADS) {
         const link = linkQueue.shift();
         activeWorkers++;
         try {
@@ -117,15 +134,26 @@ async function processQueue() {
     }
 }
 
-// Function to add a link to the download queue
+// Function to process a link
 async function processLink(link) {
+    // TODO: Add link format validation
+    if (!validateTelegramLink(link)) {
+        logger.warn(`Invalid Telegram link: ${link}`);
+        return;
+    }
     linkQueue.push(link);
-    if (activeWorkers < MAX_SIMULTANEOUS_DOWNLOADS) {
+    if (activeWorkers < config.MAX_SIMULTANEOUS_DOWNLOADS) {
         processQueue();
     }
 }
 
-// Function to read links from a text file
+// New: Function to validate Telegram link format
+function validateTelegramLink(link) {
+    // This is a basic validation. Adjust as needed for your specific use case.
+    return /^https?:\/\/t\.me\/c\//.test(link);
+}
+
+// Function to read links from a file
 async function readLinksFromFile(filePath) {
     try {
         const fileContent = await fs.readFile(filePath, 'utf8');
@@ -158,30 +186,36 @@ async function loadSession() {
 }
 
 // Function to handle user input for pausing/resuming downloads
-async function handleUserInput() {
+function handleUserInput() {
     rl.on('line', (input) => {
-        if (input.toLowerCase() === 'pause') {
-            downloads.forEach((download) => {
-                download.worker.postMessage({ action: 'pause' });
-            });
-            logger.info('All downloads paused');
-        } else if (input.toLowerCase() === 'resume') {
-            downloads.forEach((download) => {
-                download.worker.postMessage({ action: 'resume' });
-            });
-            logger.info('All downloads resumed');
-        } else if (input.toLowerCase() === 'status') {
-            console.log('\nCurrent downloads:');
-            downloads.forEach((download, id) => {
-                console.log(`${download.fileName}: ${download.progress}% - ${download.speed} MB/s`);
-            });
+        switch (input.toLowerCase()) {
+            case 'pause':
+                downloads.forEach((download) => {
+                    download.worker.postMessage({ action: 'pause' });
+                });
+                logger.info('All downloads paused');
+                break;
+            case 'resume':
+                downloads.forEach((download) => {
+                    download.worker.postMessage({ action: 'resume' });
+                });
+                logger.info('All downloads resumed');
+                break;
+            case 'status':
+                console.log('\nCurrent downloads:');
+                downloads.forEach((download, id) => {
+                    console.log(`${download.fileName}: ${download.progress}% - ${download.speed} MB/s`);
+                });
+                break;
+            default:
+                logger.info('Unknown command. Available commands: pause, resume, status');
         }
     });
 }
 
 let client;
 
-// Main function to run the script
+// Main function
 async function main() {
     try {
         // Load saved session if available
@@ -257,4 +291,5 @@ async function main() {
     }
 }
 
+// Execute the main function
 main().catch((error) => logger.error('Uncaught error:', error));

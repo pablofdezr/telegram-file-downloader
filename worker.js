@@ -5,59 +5,107 @@ import { Api } from 'telegram/tl/api.js';
 import fs from 'fs';
 import path from 'path';
 import logger from './logger.js';
+import mime from 'mime-types';
+import config from './config.js'; // Import configuration
 
-// Extract data passed from the main thread
+// Extract worker data
 const { link, stringSession, apiId, apiHash, downloadsPath } = workerData;
 
 // Initialize Telegram client
 const client = new TelegramClient(new StringSession(stringSession), apiId, apiHash, {
-    connectionRetries: 5,
-    timeout: 60000, // 60 seconds
+    connectionRetries: config.CONNECTION_RETRIES,
+    timeout: config.CLIENT_TIMEOUT,
+    useWSS: true,
 });
 
-// Flag to control download pause/resume
+// Download control variables
 let isPaused = false;
+let isCancelled = false;
 
-// Listen for pause/resume messages from the parent thread
+// Handle messages from the main thread
 parentPort.on('message', (message) => {
-    if (message.action === 'pause') {
-        isPaused = true;
-        logger.info('Download paused');
-    } else if (message.action === 'resume') {
-        isPaused = false;
-        logger.info('Download resumed');
+    switch (message.action) {
+        case 'pause':
+            isPaused = true;
+            logger.info('Download paused');
+            break;
+        case 'resume':
+            isPaused = false;
+            logger.info('Download resumed');
+            break;
+        case 'cancel':
+            isCancelled = true;
+            logger.info('Download cancelled');
+            break;
+        default:
+            logger.warn(`Unknown action received: ${message.action}`);
     }
 });
 
-// Function to extract file information from a Telegram message
+/**
+ * Get file extension based on MIME type
+ * @param {string} mimeType - MIME type of the file
+ * @param {string} defaultExt - Default extension if MIME type is not recognized
+ * @returns {string} File extension
+ */
+function getFileExtension(mimeType, defaultExt = 'bin') {
+    return mime.extension(mimeType) || defaultExt;
+}
+
+/**
+ * Get file information from a Telegram message
+ * @param {Object} message - Telegram message object
+ * @returns {Object|null} File information or null if no downloadable media
+ */
 async function getFileInfo(message) {
     if (message.media) {
         if (message.media instanceof Api.MessageMediaDocument) {
+            const document = message.media.document;
+            let fileName = 'unknown';
+            let fileExtension = 'bin';
+            
+            const fileNameAttr = document.attributes.find(attr => attr instanceof Api.DocumentAttributeFilename);
+            if (fileNameAttr) {
+                fileName = fileNameAttr.fileName;
+                fileExtension = path.extname(fileName).slice(1) || getFileExtension(document.mimeType, 'bin');
+            } else {
+                fileExtension = getFileExtension(document.mimeType, 'bin');
+                fileName = `file.${fileExtension}`;
+            }
+
             return {
-                size: message.media.document.size,
-                name: message.media.document.attributes.find(attr => attr instanceof Api.DocumentAttributeFilename)?.fileName || 'unknown'
+                size: document.size,
+                name: fileName,
+                mimeType: document.mimeType,
+                extension: fileExtension
             };
         } else if (message.media instanceof Api.MessageMediaPhoto) {
-            // For photos, exact size isn't available before download
-            // We can estimate based on the highest available resolution
             const sizes = message.media.photo.sizes;
             const largestSize = sizes[sizes.length - 1];
             return {
                 size: largestSize.size || 0,
-                name: `photo_${message.media.photo.id}.jpg`
+                name: `photo_${message.media.photo.id}.jpg`,
+                mimeType: 'image/jpeg',
+                extension: 'jpg'
             };
         }
     }
     return null;
 }
 
-// Function to download media from a Telegram message
+/**
+ * Download media from a Telegram message
+ * @param {Object} message - Telegram message object
+ * @returns {Promise<Object>} Download result
+ */
 async function downloadMedia(message) {
     const fileInfo = await getFileInfo(message);
     if (!fileInfo) {
         logger.warn('The message does not contain downloadable media.');
         return { error: 'The message does not contain downloadable media.' };
     }
+
+    logger.info(`Preparing to download: ${fileInfo.name} (${fileInfo.mimeType}), size: ${fileInfo.size} bytes`);
 
     const fileName = path.join(downloadsPath, `downloaded_${fileInfo.name}`);
     const totalSize = fileInfo.size;
@@ -67,28 +115,33 @@ async function downloadMedia(message) {
 
     const file = fs.createWriteStream(fileName);
 
-    try {
-        await client.downloadMedia(message.media, {
+    return new Promise((resolve, reject) => {
+        client.downloadMedia(message.media, {
             outputFile: file,
             progressCallback: (downloaded) => {
-                while (isPaused) {
-                    // Wait while paused
-                    new Promise(resolve => setTimeout(resolve, 100));
+                // Handle pause and cancel
+                while (isPaused && !isCancelled) {
+                    return new Promise(resolve => setTimeout(resolve, 100));
+                }
+                if (isCancelled) {
+                    file.close();
+                    fs.unlink(fileName, () => {});
+                    reject(new Error('Download cancelled'));
+                    return;
                 }
                 
                 downloadedSize = downloaded;
                 const currentTime = Date.now();
-                const elapsedTime = (currentTime - startTime) / 1000; // time in seconds
-                const speed = (downloaded / elapsedTime / (1024 * 1024)).toFixed(2); // MB/s
+                const elapsedTime = (currentTime - startTime) / 1000;
+                const speed = (downloaded / elapsedTime / (1024 * 1024)).toFixed(2);
                 const progress = totalSize ? Math.round((downloaded / totalSize) * 100) : 0;
                 
-                // Update only every second
-                if (currentTime - lastUpdateTime >= 1000) {
+                if (currentTime - lastUpdateTime >= config.PROGRESS_UPDATE_INTERVAL) {
                     const downloadedMB = (downloadedSize / (1024 * 1024)).toFixed(2);
                     const totalMB = (totalSize / (1024 * 1024)).toFixed(2);
                     parentPort.postMessage({ 
                         type: 'progress', 
-                        fileName, 
+                        fileName: fileInfo.name,
                         progress, 
                         speed,
                         downloadedSize: downloadedMB,
@@ -97,23 +150,36 @@ async function downloadMedia(message) {
                     lastUpdateTime = currentTime;
                 }
             }
+        }).then(() => {
+            file.end(() => {
+                const finalElapsedTime = (Date.now() - startTime) / 1000;
+                const finalSpeed = (totalSize / finalElapsedTime / (1024 * 1024)).toFixed(2);
+                logger.info(`Download completed: ${fileName} - Total size: ${(totalSize / (1024 * 1024)).toFixed(2)} MB, Average speed: ${finalSpeed} MB/s`);
+                parentPort.postMessage({ 
+                    type: 'complete', 
+                    fileName: fileInfo.name, 
+                    totalSize: (totalSize / (1024 * 1024)).toFixed(2), 
+                    finalSpeed 
+                });
+                resolve({ fileName: fileInfo.name, totalSize, finalSpeed });
+            });
+        }).catch((error) => {
+            logger.error(`Error during download of ${fileName}:`, error);
+            file.close(() => {
+                fs.unlink(fileName, (err) => {
+                    if (err) logger.error(`Error deleting incomplete file: ${err}`);
+                    parentPort.postMessage({ type: 'error', message: error.message });
+                    reject(error);
+                });
+            });
         });
-
-        file.close();
-
-        const finalElapsedTime = (Date.now() - startTime) / 1000;
-        const finalSpeed = (totalSize / finalElapsedTime / (1024 * 1024)).toFixed(2);
-        logger.info(`Download completed: ${fileName} - Total size: ${(totalSize / (1024 * 1024)).toFixed(2)} MB, Average speed: ${finalSpeed} MB/s`);
-        return { fileName, totalSize, finalSpeed };
-    } catch (error) {
-        logger.error(`Error during download of ${fileName}:`, error);
-        file.close();
-        fs.unlinkSync(fileName);  // Delete the incomplete file
-        throw error;
-    }
+    });
 }
 
-// Main function to process a Telegram link
+/**
+ * Process a Telegram link
+ * @param {string} link - Telegram message link
+ */
 async function processLink(link) {
     try {
         await client.connect();
@@ -125,7 +191,7 @@ async function processLink(link) {
             channelId = parseInt('-100' + parts[4]);
             messageId = parseInt(parts[parts.length - 1]);
         } else {
-            throw new Error('Unsupported link');
+            throw new Error('Unsupported link format');
         }
 
         const result = await client.invoke(new Api.channels.GetMessages({
@@ -149,5 +215,5 @@ async function processLink(link) {
     }
 }
 
-// Start processing the link
+// Main execution
 processLink(link).catch(error => logger.error('Uncaught error in processLink:', error));
