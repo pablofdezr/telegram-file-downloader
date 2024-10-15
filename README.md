@@ -4,27 +4,27 @@
 
 ## Overview
 
-Telegram File Downloader is a Node.js application that allows you to download files and media from Telegram channels and chats using message links. It supports concurrent downloads, progress tracking, and can handle large files efficiently.
+Telegram File Downloader is a robust Node.js application designed to download files and media from Telegram channels and chats using message links. It offers a user-friendly interface, supports concurrent downloads, provides real-time progress tracking, and efficiently handles large files.
 
 ## Features
 
-- Download files and media from Telegram using message links
-- Support for both public and private channels (with proper authentication)
-- Concurrent downloads to maximize efficiency
-- Real-time progress tracking for each download
-- Pause, resume, and cancel functionality for downloads
-- Session management for quick reconnection
-- Detailed logging with daily rotation for easy troubleshooting
-- Graceful error handling and recovery
-- Option to read multiple links from a text file
-- Configurable settings through environment variables and a central config file
+- **Versatile Download Support**: Download files from both public and private Telegram channels, as well as public broadcast channels.
+- **Concurrent Downloads**: Maximize efficiency with simultaneous downloads.
+- **Real-time Progress Tracking**: Monitor download progress with live updates in the console.
+- **Interactive User Interface**: Easy-to-use menu system for selecting input modes and managing downloads.
+- **Download Management**: Pause, resume, and cancel functionality for active downloads.
+- **Session Management**: Quick reconnection using saved sessions for subsequent runs.
+- **Advanced Logging**: Detailed logging with daily rotation for easy troubleshooting.
+- **Error Handling**: Graceful error management and recovery mechanisms.
+- **Bulk Download Option**: Process multiple links from a text file.
+- **Configurable Settings**: Customize application behavior through environment variables and a central configuration file.
 
 ## Prerequisites
 
-Before you begin, ensure you have met the following requirements:
+Ensure you have the following before starting:
 
 - Node.js (v14.0.0 or higher)
-- npm (usually comes with Node.js)
+- npm (typically bundled with Node.js)
 - A Telegram account
 - Telegram API credentials (api_id and api_hash)
 
@@ -36,97 +36,109 @@ Before you begin, ensure you have met the following requirements:
    cd telegram-file-downloader
    ```
 
-2. Install the dependencies:
+2. Install dependencies:
    ```
    npm install
    ```
 
-3. Create a `.env` file in the root directory and add your Telegram API credentials:
+3. Set up your environment:
+   Create a `.env` file in the root directory with the following content:
    ```
    API_ID=your_api_id
    API_HASH=your_api_hash
    LOG_LEVEL=info
    NODE_ENV=development
    ```
-
-   You can obtain these credentials by following the instructions at https://core.telegram.org/api/obtaining_api_id
+   Replace `your_api_id` and `your_api_hash` with your Telegram API credentials. You can obtain these at https://core.telegram.org/api/obtaining_api_id
 
 ## Configuration
 
-The application uses a central `config.js` file for managing all settings. You can override these settings by adding them to your `.env` file. Some key configurations include:
+The application uses a `config.js` file for centralized configuration management. Key settings include:
 
 - `MAX_SIMULTANEOUS_DOWNLOADS`: Maximum number of concurrent downloads (default: 3)
-- `MAX_RETRIES`: Maximum number of retry attempts for failed downloads (default: 3)
-- `DOWNLOAD_TIMEOUT`: Timeout for downloads in milliseconds (default: 300000)
-- `LOG_LEVEL`: Logging level (default: 'info')
-- `DOWNLOADS_PATH`: Path for downloaded files (default: user's Downloads folder)
+- `MAX_RETRIES`: Maximum retry attempts for failed downloads (default: 3)
+- `DOWNLOAD_TIMEOUT`: Download timeout in milliseconds (default: 300000)
+- `LOG_LEVEL`: Logging verbosity (default: 'info')
+- `DOWNLOADS_PATH`: Directory for downloaded files (default: user's Downloads folder)
+
+You can override these settings by adding them to your `.env` file.
 
 ## Usage
 
-1. Start the application:
+1. Launch the application:
    ```
    npm start
    ```
 
-2. On first run, you'll be prompted to enter your phone number and the authentication code sent to your Telegram account. In subsequent runs, you'll have the option to use the saved session.
+2. First-time Setup:
+   - Enter your phone number and the authentication code sent to your Telegram account.
+   - For subsequent runs, you'll have the option to use the saved session.
 
-3. Choose whether you want to input links manually or read them from a file:
-   - For manual input, enter "manual"
-   - To read from a file, enter "file" and then provide the path to your text file containing links (one per line)
+3. Input Mode Selection:
+   You'll be presented with an interactive menu to choose the input mode:
+   - Use arrow keys to navigate
+   - Press Enter to select:
+     - "Manual input": Enter Telegram links individually
+     - "File input": Provide a text file with multiple links
 
-4. If inputting manually, enter a Telegram message link when prompted. The link should be in the format:
-   ```
-   https://t.me/c/channel_id/message_id
-   ```
+4. Entering Links:
+   - For "Manual input", enter Telegram message links when prompted. Supported formats:
+     ```
+     https://t.me/c/channel_id/message_id  (for private channels)
+     https://t.me/channel_name/message_id  (for public channels or broadcast channels)
+     ```
+   - For "File input", provide the path to a text file containing Telegram links (one per line).
 
-5. The application will start downloading the file(s). You'll see real-time progress updates in the console.
+5. Download Process:
+   - The application will initiate the download(s).
+   - Real-time progress updates will be displayed in the console.
 
-6. To download another file (in manual mode), simply paste another link when prompted.
+6. Continuous Usage (Manual Mode):
+   - To download another file, paste a new link when prompted.
+   - To exit, type 'exit' at the link prompt.
 
-7. To exit the application, type 'exit' when prompted for a link (in manual mode).
+## In-Progress Download Commands
 
-## Commands
+While downloads are active, you can use these commands:
 
-While downloads are in progress, you can use the following commands:
+- `pause`: Temporarily halt all current downloads
+- `resume`: Continue all paused downloads
+- `status`: View the current status of all active downloads
+- `cancel`: Terminate the current download
 
-- `pause`: Pauses all current downloads
-- `resume`: Resumes all paused downloads
-- `status`: Displays the current status of all active downloads
-- `cancel`: Cancels the current download (new feature)
+## Logging System
 
-## Logging
+The application employs Winston for sophisticated logging:
 
-The application now uses Winston for advanced logging capabilities:
+- Logs are automatically rotated daily and stored in the configured `LOG_DIR`
+- Separate files for general logs (`application-%DATE%.log`) and errors (`error-%DATE%.log`)
+- Console output features color-coding for improved readability
+- Log verbosity is configurable via the `LOG_LEVEL` environment variable
 
-- Logs are rotated daily and stored in the configured `LOG_DIR`
-- Separate log files for general logs (`application-%DATE%.log`) and errors (`error-%DATE%.log`)
-- Console output is colorized for better readability
-- Log level can be configured through the `LOG_LEVEL` environment variable
+## Troubleshooting Guide
 
-## Troubleshooting
+If you encounter issues:
 
-If you encounter any issues:
-
-1. Check the log files in the configured `LOG_DIR` for detailed messages.
-2. Ensure your Telegram API credentials are correct in the `.env` file.
-3. Verify that you have the necessary permissions to access the channel/chat.
-4. Make sure you're using a compatible version of Node.js.
-5. If you're having connection issues, try adjusting the `CONNECTION_RETRIES` and `CLIENT_TIMEOUT` settings in `config.js`.
+1. Examine the log files in `LOG_DIR` for detailed error messages and application behavior.
+2. Verify your Telegram API credentials in the `.env` file.
+3. Ensure you have the necessary permissions to access the target channel/chat.
+4. Confirm you're using a compatible Node.js version (v14.0.0+).
+5. For connection problems, try adjusting `CONNECTION_RETRIES` and `CLIENT_TIMEOUT` in `config.js`.
 
 ## Contributing
 
-Contributions to the Telegram File Downloader are welcome. Please feel free to submit a Pull Request. When contributing, please:
+We welcome contributions to the Telegram File Downloader! To contribute:
 
 1. Fork the repository and create your branch from `main`.
-2. If you've added code that should be tested, add tests.
-3. Ensure your code lints.
-4. Update the documentation.
-5. Create a pull request.
+2. Add tests for any new functionality.
+3. Ensure your code passes all linting checks.
+4. Update the documentation to reflect your changes.
+5. Submit a pull request with a clear description of your improvements.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is distributed under the MIT License. See the [LICENSE](LICENSE) file for full details.
 
 ## Disclaimer
 
-This tool is for personal use only. Please respect Telegram's terms of service and the copyright of content owners. Do not use this tool to download or distribute copyrighted material without permission.
+This tool is intended for personal use only. Please adhere to Telegram's terms of service and respect copyright laws. Do not use this tool to download or distribute copyrighted material without proper authorization.

@@ -40,6 +40,66 @@ const rl = readline.createInterface({
 // Promisify the readline question method
 const question = promisify(rl.question).bind(rl);
 
+// Function to select input mode
+async function selectInputMode() {
+  // Define the available choices
+  const choices = ['Manual input', 'File input'];
+  // Keep track of the currently selected index
+  let selectedIndex = 0;
+
+  // Function to render the choices in the console
+  const renderChoices = () => {
+    // Clear the console to provide a clean display
+    console.clear();
+    console.log('Select input mode:');
+    // Iterate through the choices and display them
+    choices.forEach((choice, index) => {
+      // Highlight the currently selected choice with a '>' symbol
+      if (index === selectedIndex) {
+        console.log(`> ${choice}`);
+      } else {
+        console.log(`  ${choice}`);
+      }
+    });
+    // Display instructions for navigation
+    console.log('\nUse arrow keys to move and press Enter to select.');
+  };
+
+  // Initial render of the choices
+  renderChoices();
+
+  // Return a Promise that resolves when a choice is made
+  return new Promise(resolve => {
+    // Set up keypress events for user input
+    readline.emitKeypressEvents(process.stdin);
+    // If the input is from a terminal, enable raw mode for direct key capture
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+    }
+
+    // Listen for keypress events
+    process.stdin.on('keypress', (str, key) => {
+      // Handle 'up' arrow key: move selection up if not at the top
+      if (key.name === 'up' && selectedIndex > 0) {
+        selectedIndex--;
+        renderChoices();
+      } 
+      // Handle 'down' arrow key: move selection down if not at the bottom
+      else if (key.name === 'down' && selectedIndex < choices.length - 1) {
+        selectedIndex++;
+        renderChoices();
+      } 
+      // Handle 'Enter' key: finalize selection
+      else if (key.name === 'return') {
+        // Disable raw mode to return to normal input handling
+        process.stdin.setRawMode(false);
+        // Resolve the promise with 'manual' or 'file' based on selection
+        resolve(selectedIndex === 0 ? 'manual' : 'file');
+      }
+    });
+  });
+}
+
 // Function to create and manage a worker
 async function createWorker(link, stringSession, retryCount = 0) {
     const downloadsPath = path.join(os.homedir(), 'Downloads');
@@ -252,28 +312,25 @@ async function main() {
         handleUserInput();
 
         // Ask user for input mode
-        const mode = await question('Enter "file" to process URLs from a text file, or "manual" for individual links: ');
+        const mode = await selectInputMode();
 
-        if (mode.toLowerCase() === 'file') {
+        if (mode === 'file') {
             // Process URLs from a file
-            const filePath = await question('Enter the path to the text file containing URLs: ');
-            const links = await readLinksFromFile(filePath);
-            for (const link of links) {
-                await processLink(link);
-            }
-        } else if (mode.toLowerCase() === 'manual') {
-            // Process URLs manually
-            while (true) {
-                const link = await question('Enter a Telegram link (or "exit" to finish): ');
-                if (link.toLowerCase() === 'exit') {
-                    break;
-                }
-                await processLink(link);
-            }
-        } else {
-            logger.error('Invalid mode selected. Exiting.');
-            process.exit(1);
-        }
+    const filePath = await question('Enter the path to the text file containing URLs: ');
+    const links = await readLinksFromFile(filePath);
+    for (const link of links) {
+      await processLink(link);
+    }
+  } else {
+    // Process URLs manually
+    while (true) {
+      const link = await question('Enter a Telegram link (or "exit" to finish): ');
+      if (link.toLowerCase() === 'exit') {
+        break;
+      }
+      await processLink(link);
+    }
+  }
 
         // Wait for all downloads to complete
         while (activeWorkers > 0 || linkQueue.length > 0) {

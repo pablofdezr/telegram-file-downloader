@@ -184,12 +184,24 @@ async function processLink(link) {
     try {
         await client.connect();
         logger.info(`Processing link: ${link}`);
-        const parts = link.split('/');
         let channelId, messageId;
 
         if (link.includes('t.me/c/')) {
+            // Private channel
+            const parts = link.split('/');
             channelId = parseInt('-100' + parts[4]);
             messageId = parseInt(parts[parts.length - 1]);
+        } else if (link.match(/t\.me\/[a-zA-Z0-9_]+\/\d+/)) {
+            // Public channel
+            const parts = link.split('/');
+            const channelName = parts[3];
+            messageId = parseInt(parts[4]);
+            
+            // Resolve the channel username to get the channel ID
+            const resolveResult = await client.invoke(new Api.contacts.ResolveUsername({
+                username: channelName
+            }));
+            channelId = resolveResult.chats[0].id;
         } else {
             throw new Error('Unsupported link format');
         }
