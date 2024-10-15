@@ -4,23 +4,24 @@
 
 ## Overview
 
-Telegram File Downloader is a powerful Node.js application designed to download files and media from Telegram channels and chats using message links. It offers a user-friendly interface, supports concurrent downloads, provides real-time progress tracking, and efficiently handles large files. With the new rolling download feature, it's now even more versatile for bulk media downloads.
+Telegram File Downloader is a powerful Node.js application designed to download files and media from Telegram channels and chats using message links. It offers a user-friendly interface, supports concurrent downloads, provides real-time progress tracking, and efficiently handles large files. With enhanced features like improved rolling download and unique file naming, it's now even more versatile for bulk media downloads.
 
 ## Features
 
 - **Versatile Download Support**: Download files from both public and private Telegram channels, as well as public broadcast channels.
 - **Concurrent Downloads**: Maximize efficiency with simultaneous downloads.
-- **Real-time Progress Tracking**: Monitor download progress with live updates in the console.
+- **Real-time Progress Tracking**: Monitor download progress with live updates in the console, including estimated time remaining.
 - **Interactive User Interface**: Easy-to-use menu system for selecting input modes and managing downloads.
 - **Multiple Download Modes**:
   - **Single Download**: Download media from a specific message.
   - **File Input**: Process multiple links from a text file.
-  - **Rolling Download**: Automatically download consecutive multimedia messages from a starting point.
+  - **Rolling Download**: Automatically download consecutive multimedia messages from a starting point, with improved handling of channel limits.
 - **Download Management**: Pause, resume, and cancel functionality for active downloads.
 - **Session Management**: Quick reconnection using saved sessions for subsequent runs.
 - **Advanced Logging**: Detailed logging with daily rotation for easy troubleshooting.
-- **Error Handling**: Graceful error management and recovery mechanisms.
+- **Error Handling**: Graceful error management and recovery mechanisms, including improved handling of network issues.
 - **Configurable Settings**: Customize application behavior through environment variables and a central configuration file.
+- **Unique File Naming**: Utilizes nanoid for generating unique filenames, preventing conflicts during downloads.
 
 ## Prerequisites
 
@@ -34,12 +35,14 @@ Ensure you have the following before starting:
 ## Installation
 
 1. Clone the repository:
+
    ```
    git clone https://github.com/pablofdezr/telegram-file-downloader.git
    cd telegram-file-downloader
    ```
 
 2. Install dependencies:
+
    ```
    npm install
    ```
@@ -72,16 +75,19 @@ You can override these settings by adding them to your `.env` file.
 ## Usage
 
 1. Launch the application:
+
    ```
    npm start
    ```
 
 2. First-time Setup:
+
    - Enter your phone number and the authentication code sent to your Telegram account.
    - For subsequent runs, you'll have the option to use the saved session.
 
 3. Input Mode Selection:
    You'll be presented with an interactive menu to choose the input mode:
+
    - Use arrow keys to navigate
    - Press Enter to select:
      - "Manual input": Enter Telegram links individually
@@ -89,6 +95,7 @@ You can override these settings by adding them to your `.env` file.
      - "Rolling input": Start a continuous download from a specific message
 
 4. Entering Links:
+
    - For "Manual input" or "Rolling input", enter Telegram message links when prompted. Supported formats:
      ```
      https://t.me/c/channel_id/message_id  (for private channels)
@@ -97,11 +104,14 @@ You can override these settings by adding them to your `.env` file.
    - For "File input", provide the path to a text file containing Telegram links (one per line).
 
 5. Download Process:
+
    - The application will initiate the download(s) based on the selected mode.
-   - Real-time progress updates will be displayed in the console.
+   - Real-time progress updates will be displayed in the console, including download speed and estimated time remaining.
 
 6. Rolling Download Mode:
+
    - When using "Rolling input", the application will start from the specified message and continue downloading subsequent multimedia messages until it reaches the end of the channel or encounters an error.
+   - The improved rolling download feature now handles cases where the last message ID cannot be directly obtained, ensuring more reliable bulk downloads.
 
 7. Continuous Usage (Manual Mode):
    - To download another file, paste a new link when prompted.
@@ -141,7 +151,7 @@ If you encounter issues:
 
 ### Rolling Download
 
-The rolling download feature allows you to automatically download multiple multimedia messages from a Telegram channel starting from a specific message:
+The improved rolling download feature allows you to automatically download multiple multimedia messages from a Telegram channel starting from a specific message:
 
 1. Select "Rolling input" when prompted for the input mode.
 2. Enter a Telegram message link as the starting point.
@@ -150,6 +160,7 @@ The rolling download feature allows you to automatically download multiple multi
    - Automatically move to the next message in the channel.
    - Download any multimedia content found in subsequent messages.
    - Continue this process until it reaches the end of the channel or encounters an error.
+   - Use alternative methods to determine the last message ID if the primary method fails.
 
 This mode is particularly useful for bulk downloading recent media from a channel without manually specifying each message link.
 
