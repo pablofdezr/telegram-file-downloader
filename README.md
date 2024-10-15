@@ -12,9 +12,11 @@ Telegram File Downloader is a Node.js application that allows you to download fi
 - Support for both public and private channels (with proper authentication)
 - Concurrent downloads to maximize efficiency
 - Real-time progress tracking for each download
-- Pause and resume functionality for downloads
+- Pause and resume functionality for all downloads
+- Session management for quick reconnection
 - Detailed logging for easy troubleshooting
 - Graceful error handling and recovery
+- Option to read multiple links from a text file
 
 ## Prerequisites
 
@@ -53,26 +55,30 @@ Before you begin, ensure you have met the following requirements:
    npm start
    ```
 
-2. On first run, you'll be prompted to enter your phone number and the authentication code sent to your Telegram account.
+2. On first run, you'll be prompted to enter your phone number and the authentication code sent to your Telegram account. In subsequent runs, you'll have the option to use the saved session.
 
-3. Once authenticated, you'll be prompted to enter a Telegram message link. The link should be in the format:
+3. Choose whether you want to input links manually or read them from a file:
+   - For manual input, enter "manual"
+   - To read from a file, enter "file" and then provide the path to your text file containing links (one per line)
+
+4. If inputting manually, enter a Telegram message link when prompted. The link should be in the format:
    ```
    https://t.me/c/channel_id/message_id
    ```
 
-4. The application will start downloading the file. You'll see real-time progress updates in the console.
+5. The application will start downloading the file(s). You'll see real-time progress updates in the console.
 
-5. To download another file, simply paste another link when prompted.
+6. To download another file (in manual mode), simply paste another link when prompted.
 
-6. To exit the application, type 'exit' when prompted for a link.
+7. To exit the application, type 'exit' when prompted for a link (in manual mode).
 
 ## Commands
 
-While a download is in progress, you can use the following commands:
+While downloads are in progress, you can use the following commands:
 
-- `pause`: Pauses the current download
-- `resume`: Resumes a paused download
-- `cancel`: Cancels the current download
+- `pause`: Pauses all current downloads
+- `resume`: Resumes all paused downloads
+- `status`: Displays the current status of all active downloads
 
 ## Troubleshooting
 

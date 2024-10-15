@@ -3,15 +3,19 @@ import { TelegramClient } from 'telegram/client/TelegramClient.js';
 import { StringSession } from 'telegram/sessions/StringSession.js';
 import { Api } from 'telegram/tl/api.js';
 import fs from 'fs';
+import path from 'path';
 import logger from './logger.js';
 
-const { link, stringSession, apiId, apiHash } = workerData;
+// Extract data passed from the main thread
+const { link, stringSession, apiId, apiHash, downloadsPath } = workerData;
 
+// Initialize Telegram client
 const client = new TelegramClient(new StringSession(stringSession), apiId, apiHash, {
     connectionRetries: 5,
     timeout: 60000, // 60 seconds
 });
 
+// Flag to control download pause/resume
 let isPaused = false;
 
 // Listen for pause/resume messages from the parent thread
@@ -55,7 +59,7 @@ async function downloadMedia(message) {
         return { error: 'The message does not contain downloadable media.' };
     }
 
-    const fileName = `downloaded_${fileInfo.name}`;
+    const fileName = path.join(downloadsPath, `downloaded_${fileInfo.name}`);
     const totalSize = fileInfo.size;
     let downloadedSize = 0;
     let startTime = Date.now();
@@ -145,4 +149,5 @@ async function processLink(link) {
     }
 }
 
+// Start processing the link
 processLink(link).catch(error => logger.error('Uncaught error in processLink:', error));
