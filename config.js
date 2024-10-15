@@ -9,7 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const config = {
   // Telegram API credentials
-  API_ID: process.env.API_ID,
+  API_ID: parseInt(process.env.API_ID, 10),
   API_HASH: process.env.API_HASH,
 
   // Download settings

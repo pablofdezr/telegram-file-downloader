@@ -1,3 +1,4 @@
+// Import necessary modules
 import { workerData, parentPort } from 'worker_threads';
 import { TelegramClient } from 'telegram/client/TelegramClient.js';
 import { StringSession } from 'telegram/sessions/StringSession.js';
@@ -7,11 +8,12 @@ import path from 'path';
 import logger from './logger.js';
 import mime from 'mime-types';
 import config from './config.js'; // Import configuration
+import { nanoid } from 'nanoid';
 
-// Extract worker data
-const { link, stringSession, apiId, apiHash, downloadsPath } = workerData;
+// Extract worker data passed from the main thread
+const { link, stringSession, apiId, apiHash, downloadsPath, mode } = workerData;
 
-// Initialize Telegram client
+// Initialize Telegram client with the provided session and credentials
 const client = new TelegramClient(new StringSession(stringSession), apiId, apiHash, {
     connectionRetries: config.CONNECTION_RETRIES,
     timeout: config.CLIENT_TIMEOUT,
@@ -22,7 +24,7 @@ const client = new TelegramClient(new StringSession(stringSession), apiId, apiHa
 let isPaused = false;
 let isCancelled = false;
 
-// Handle messages from the main thread
+// Handle messages from the main thread for download control
 parentPort.on('message', (message) => {
     switch (message.action) {
         case 'pause':
@@ -60,10 +62,12 @@ function getFileExtension(mimeType, defaultExt = 'bin') {
 async function getFileInfo(message) {
     if (message.media) {
         if (message.media instanceof Api.MessageMediaDocument) {
+            // Handle document messages (files, etc.)
             const document = message.media.document;
             let fileName = 'unknown';
             let fileExtension = 'bin';
             
+            // Try to get the filename from document attributes
             const fileNameAttr = document.attributes.find(attr => attr instanceof Api.DocumentAttributeFilename);
             if (fileNameAttr) {
                 fileName = fileNameAttr.fileName;
@@ -80,6 +84,7 @@ async function getFileInfo(message) {
                 extension: fileExtension
             };
         } else if (message.media instanceof Api.MessageMediaPhoto) {
+            // Handle photo messages
             const sizes = message.media.photo.sizes;
             const largestSize = sizes[sizes.length - 1];
             return {
@@ -100,6 +105,8 @@ async function getFileInfo(message) {
  */
 async function downloadMedia(message) {
     const fileInfo = await getFileInfo(message);
+
+    const nanoId = nanoid();
     if (!fileInfo) {
         logger.warn('The message does not contain downloadable media.');
         return { error: 'The message does not contain downloadable media.' };
@@ -107,7 +114,8 @@ async function downloadMedia(message) {
 
     logger.info(`Preparing to download: ${fileInfo.name} (${fileInfo.mimeType}), size: ${fileInfo.size} bytes`);
 
-    const fileName = path.join(downloadsPath, `downloaded_${fileInfo.name}`);
+    const fileName = path.join(downloadsPath, `downloaded_${nanoId}_${fileInfo.name}`);
+
     const totalSize = fileInfo.size;
     let downloadedSize = 0;
     let startTime = Date.now();
@@ -136,6 +144,7 @@ async function downloadMedia(message) {
                 const speed = (downloaded / elapsedTime / (1024 * 1024)).toFixed(2);
                 const progress = totalSize ? Math.round((downloaded / totalSize) * 100) : 0;
                 
+                // Send progress updates at specified intervals
                 if (currentTime - lastUpdateTime >= config.PROGRESS_UPDATE_INTERVAL) {
                     const downloadedMB = (downloadedSize / (1024 * 1024)).toFixed(2);
                     const totalMB = (totalSize / (1024 * 1024)).toFixed(2);
@@ -179,53 +188,134 @@ async function downloadMedia(message) {
 /**
  * Process a Telegram link
  * @param {string} link - Telegram message link
+ * @param {string} mode - Download mode ('single' or 'rolling')
  */
-async function processLink(link) {
-    try {
-        await client.connect();
-        logger.info(`Processing link: ${link}`);
-        let channelId, messageId;
+async function processLink(link, mode = 'single') {
+  try {
+    await client.connect();
+    logger.info(`Processing link: ${link} in ${mode} mode`);
 
-        if (link.includes('t.me/c/')) {
-            // Private channel
-            const parts = link.split('/');
-            channelId = parseInt('-100' + parts[4]);
-            messageId = parseInt(parts[parts.length - 1]);
-        } else if (link.match(/t\.me\/[a-zA-Z0-9_]+\/\d+/)) {
-            // Public channel
-            const parts = link.split('/');
-            const channelName = parts[3];
-            messageId = parseInt(parts[4]);
-            
-            // Resolve the channel username to get the channel ID
-            const resolveResult = await client.invoke(new Api.contacts.ResolveUsername({
-                username: channelName
-            }));
-            channelId = resolveResult.chats[0].id;
-        } else {
-            throw new Error('Unsupported link format');
-        }
+    if (mode === 'rolling') {
+      await rollingDownload(link);
+    } else {
+      // Existing single download logic
+      let channelId, messageId;
 
+      if (link.includes('t.me/c/')) {
+        // Private channel
+        const parts = link.split('/');
+        channelId = parseInt('-100' + parts[4]);
+        messageId = parseInt(parts[parts.length - 1]);
+      } else if (link.match(/t\.me\/[a-zA-Z0-9_]+\/\d+/)) {
+        // Public channel
+        const parts = link.split('/');
+        const channelName = parts[3];
+        messageId = parseInt(parts[4]);
+        
+        // Resolve the channel username to get the channel ID
+        const resolveResult = await client.invoke(new Api.contacts.ResolveUsername({
+          username: channelName
+        }));
+        channelId = resolveResult.chats[0].id;
+      } else {
+        throw new Error('Unsupported link format');
+      }
+
+      const result = await client.invoke(new Api.channels.GetMessages({
+        channel: channelId,
+        id: [new Api.InputMessageID({ id: messageId })]
+      }));
+
+      if (result.messages && result.messages.length > 0) {
+        const downloadResult = await downloadMedia(result.messages[0]);
+        parentPort.postMessage({ type: 'complete', ...downloadResult });
+      } else {
+        logger.warn('Message not found.');
+        parentPort.postMessage({ type: 'error', message: 'Message not found.' });
+      }
+    }
+  } catch (error) {
+    logger.error('Error processing link:', error);
+    parentPort.postMessage({ type: 'error', message: `Error processing link: ${error.message}` });
+  } finally {
+    await client.disconnect();
+    logger.info('Client disconnected');
+  }
+}
+
+/**
+ * Perform a rolling download starting from a specific message
+ * @param {string} initialLink - Initial Telegram message link
+ */
+async function rollingDownload(initialLink) {
+  try {
+    logger.info(`Starting rolling download from: ${initialLink}`);
+    
+    let currentMessageId;
+    let channelId;
+
+    if (initialLink.includes('t.me/c/')) {
+      // Private channel
+      const parts = initialLink.split('/');
+      channelId = parseInt('-100' + parts[4]);
+      currentMessageId = parseInt(parts[parts.length - 1]);
+    } else if (initialLink.match(/t\.me\/[a-zA-Z0-9_]+\/\d+/)) {
+      // Public channel
+      const parts = initialLink.split('/');
+      const channelName = parts[3];
+      currentMessageId = parseInt(parts[4]);
+      
+      // Resolve the channel username to get the channel ID
+      const resolveResult = await client.invoke(new Api.contacts.ResolveUsername({
+        username: channelName
+      }));
+      channelId = resolveResult.chats[0].id;
+    } else {
+      throw new Error('Unsupported link format');
+    }
+
+    while (true) {
+      if (isCancelled) {
+        logger.info('Rolling download cancelled');
+        break;
+      }
+
+      try {
         const result = await client.invoke(new Api.channels.GetMessages({
-            channel: channelId,
-            id: [new Api.InputMessageID({ id: messageId })]
+          channel: channelId,
+          id: [new Api.InputMessageID({ id: currentMessageId })]
         }));
 
         if (result.messages && result.messages.length > 0) {
-            const downloadResult = await downloadMedia(result.messages[0]);
-            parentPort.postMessage({ type: 'complete', ...downloadResult });
+          const message = result.messages[0];
+          if (message.media) {
+            logger.info(`Found multimedia message at ID ${currentMessageId}. Downloading...`);
+            await downloadMedia(message);
+          } else {
+            logger.info(`Message ${currentMessageId} is not multimedia. Skipping.`);
+          }
         } else {
-            logger.warn('Message not found.');
-            parentPort.postMessage({ type: 'error', message: 'Message not found.' });
+          logger.warn(`No more messages found after ID ${currentMessageId}. Stopping rolling download.`);
+          break;
         }
-    } catch (error) {
-        logger.error('Error processing link:', error);
-        parentPort.postMessage({ type: 'error', message: `Error processing link: ${error.message}` });
-    } finally {
-        await client.disconnect();
-        logger.info('Client disconnected');
+
+        currentMessageId++;
+      } catch (error) {
+        if (error.message.includes('MESSAGE_ID_INVALID')) {
+          logger.warn(`Reached the end of the channel at message ID ${currentMessageId}. Stopping rolling download.`);
+          break;
+        }
+        throw error;
+      }
     }
+  } catch (error) {
+    logger.error('Error in rolling download:', error);
+    parentPort.postMessage({ type: 'error', message: `Error in rolling download: ${error.message}` });
+  }
 }
 
 // Main execution
-processLink(link).catch(error => logger.error('Uncaught error in processLink:', error));
+processLink(link, mode).catch(error => {
+  logger.error('Uncaught error in processLink:', error);
+  parentPort.postMessage({ type: 'error', message: `Uncaught error: ${error.message}` });
+});

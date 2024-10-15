@@ -11,12 +11,13 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
-import config from './config.js'; // New: Import configuration from a separate file
+import config from './config.js'; // Import configuration from a separate file
 
 // Configuration setup
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, '.env') });
 
+// Extract API credentials from environment variables
 const apiId = parseInt(process.env.API_ID);
 const apiHash = process.env.API_HASH;
 
@@ -37,13 +38,13 @@ const rl = readline.createInterface({
     output: process.stdout
 });
 
-// Promisify the readline question method
+// Promisify the readline question method for easier async usage
 const question = promisify(rl.question).bind(rl);
 
 // Function to select input mode
 async function selectInputMode() {
   // Define the available choices
-  const choices = ['Manual input', 'File input'];
+  const choices = ['Manual input', 'File input', 'Rolling input'];
   // Keep track of the currently selected index
   let selectedIndex = 0;
 
@@ -93,78 +94,68 @@ async function selectInputMode() {
       else if (key.name === 'return') {
         // Disable raw mode to return to normal input handling
         process.stdin.setRawMode(false);
-        // Resolve the promise with 'manual' or 'file' based on selection
-        resolve(selectedIndex === 0 ? 'manual' : 'file');
+        // Resolve the promise with 'manual', 'file' or 'rolling' based on selection
+        resolve(['manual', 'file', 'rolling'][selectedIndex]);
       }
     });
   });
 }
 
 // Function to create and manage a worker
-async function createWorker(link, stringSession, retryCount = 0) {
-    const downloadsPath = path.join(os.homedir(), 'Downloads');
-    const worker = new Worker('./worker.js', {
-        workerData: { link, stringSession, apiId, apiHash, downloadsPath }
+async function createWorker(link, stringSession, mode) {
+  const downloadsPath = path.join(os.homedir(), 'Downloads');
+  const worker = new Worker('./worker.js', {
+    workerData: { 
+      link, 
+      stringSession, 
+      apiId: config.API_ID, 
+      apiHash: config.API_HASH, 
+      downloadsPath, 
+      mode 
+    }
+  });
+
+  const id = Date.now().toString();
+  logger.info(`Starting download (mode: ${mode}): ${link}`);
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      logger.warn(`Download timeout for ${link}`);
+      worker.terminate();
+      reject(new Error('Download timeout'));
+    }, config.DOWNLOAD_TIMEOUT);
+
+    worker.on('message', (message) => {
+      if (message.type === 'progress') {
+        console.log(`Downloading ${message.fileName}: ${message.progress}% - ${message.speed} MB/s`);
+      } else if (message.type === 'complete') {
+        clearTimeout(timeout);
+        console.log(`\n${message.fileName} downloaded. Total size: ${message.totalSize} MB, Average speed: ${message.finalSpeed} MB/s`);
+        if (mode !== 'rolling') {
+          resolve();
+        }
+      } else if (message.type === 'error') {
+        clearTimeout(timeout);
+        console.error(`\nError: ${message.message}`);
+        reject(new Error(message.message));
+      }
     });
 
-    const id = Date.now().toString();
-    logger.info(`Starting download (attempt ${retryCount + 1}): ${link}`);
-
-    downloads.set(id, { worker, fileName: link, status: 'in progress', progress: 0, speed: 0, downloadedSize: 0, totalSize: 0 });
-
-    return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-            logger.warn(`Download timeout for ${link}`);
-            worker.terminate();
-            downloads.delete(id);
-            reject(new Error('Download timeout'));
-        }, config.DOWNLOAD_TIMEOUT);
-
-        worker.on('message', (message) => {
-            if (message.type === 'progress') {
-                const download = downloads.get(id);
-                Object.assign(download, {
-                    fileName: message.fileName,
-                    progress: message.progress,
-                    speed: message.speed,
-                    downloadedSize: message.downloadedSize,
-                    totalSize: message.totalSize
-                });
-                updateDownloadDisplay(id);
-            } else if (message.type === 'complete') {
-                clearTimeout(timeout);
-                process.stdout.write('\n');
-                logger.info(`${message.fileName} downloaded. Total size: ${message.totalSize} MB, Average speed: ${message.finalSpeed} MB/s`);
-                downloads.delete(id);
-                resolve();
-            } else if (message.type === 'error') {
-                clearTimeout(timeout);
-                process.stdout.write('\n');
-                logger.error(`Error: ${message.message}`);
-                downloads.delete(id);
-                if (retryCount < config.MAX_RETRIES) {
-                    logger.info(`Retrying download (attempt ${retryCount + 2})...`);
-                    resolve(createWorker(link, stringSession, retryCount + 1));
-                } else {
-                    reject(new Error(`Max retries reached for ${link}`));
-                }
-            }
-        });
-
-        worker.on('error', (error) => {
-            clearTimeout(timeout);
-            logger.error('Worker error:', error);
-            reject(error);
-        });
-
-        worker.on('exit', (code) => {
-            clearTimeout(timeout);
-            if (code !== 0) {
-                logger.error(`Worker stopped with exit code ${code}`);
-                reject(new Error(`Worker stopped with exit code ${code}`));
-            }
-        });
+    worker.on('error', (error) => {
+      clearTimeout(timeout);
+      logger.error('Worker error:', error);
+      reject(error);
     });
+
+    worker.on('exit', (code) => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        reject(new Error(`Worker stopped with exit code ${code}`));
+      } else if (mode === 'rolling') {
+        resolve();
+      }
+    });
+  });
 }
 
 // Function to update the download display
@@ -196,18 +187,20 @@ async function processQueue() {
 
 // Function to process a link
 async function processLink(link) {
-    // TODO: Add link format validation
+    // Validate the link format
     if (!validateTelegramLink(link)) {
         logger.warn(`Invalid Telegram link: ${link}`);
         return;
     }
+    // Add the link to the queue
     linkQueue.push(link);
+    // Start processing if we're not at max capacity
     if (activeWorkers < config.MAX_SIMULTANEOUS_DOWNLOADS) {
         processQueue();
     }
 }
 
-// New: Function to validate Telegram link format
+// Function to validate Telegram link format
 function validateTelegramLink(link) {
     // This is a basic validation. Adjust as needed for your specific use case.
     return /^https?:\/\/t\.me\/c\//.test(link);
@@ -316,21 +309,21 @@ async function main() {
 
         if (mode === 'file') {
             // Process URLs from a file
-    const filePath = await question('Enter the path to the text file containing URLs: ');
-    const links = await readLinksFromFile(filePath);
-    for (const link of links) {
-      await processLink(link);
-    }
-  } else {
-    // Process URLs manually
-    while (true) {
+            const filePath = await question('Enter the path to the text file containing URLs: ');
+            const links = await readLinksFromFile(filePath);
+            for (const link of links) {
+                await processLink(link);
+            }
+        } else {
+            // Process URLs manually or in rolling mode
+            while (true) {
       const link = await question('Enter a Telegram link (or "exit" to finish): ');
       if (link.toLowerCase() === 'exit') {
         break;
       }
-      await processLink(link);
+      await createWorker(link, client.session.save(), mode);
     }
-  }
+        }
 
         // Wait for all downloads to complete
         while (activeWorkers > 0 || linkQueue.length > 0) {
